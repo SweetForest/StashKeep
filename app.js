@@ -14,7 +14,6 @@ let translations = {};
 
 const TYPE_MAP = {
     "": "text",
-    "2": "md"
 };
 
 window.onload = async function() {
