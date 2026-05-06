@@ -1,0 +1,20 @@
+{
+  "subtitle": "Save text in Local Storage. Raw Text, Markdown.",
+  "storage_space": "LocalStorage Space",
+  "input_placeholder": "Type plain text or Markdown here...",
+  "add_title_placeholder": "Add title...",
+  "stash_button": "Stash It",
+  "stash_button_warn": "Confirm Auto-Clean ({count} items)",
+  "pinned_section": "Pinned",
+  "notes_section": "Notes",
+  "empty_state": "No stashed items found.",
+  "untitled_note": "Untitled note",
+  "card_placeholder_title": "Edit title...",
+  "unpin_btn": "📌 Unpin",
+  "pin_btn": "📌 Pin",
+  "delete_btn": "🗑️ Delete",
+  "delete_confirm": "⚠️ Confirm",
+  "copied_btn": "✅ Copied!",
+  "copy_btn": "📋 Copy",
+  "char_counter": "{count} characters"
+}
