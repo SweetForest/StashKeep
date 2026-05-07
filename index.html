@@ -6,9 +6,7 @@
     <title>Stash Keep - Save Secure Text & Markdown Memo</title>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js?v=1.0.0"></script>
     <link rel="stylesheet" href="style.css?v=1.0.0">
-    <link rel="manifest" href="/site.webmanifest?v=1.0.0">
-
-    <link rel="manifest" href="site.webmanifest?v=1.0.0">
+    <link rel="manifest" href="site.webmanifest">
 
     <link rel="icon" type="image/x-icon" href="icons/favicon.ico?v=1.0.0">
 
@@ -104,5 +102,15 @@
     </main>
 
     <script src="app.js?v=1.0.0"></script>
+    <script>
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", () => {
+          navigator.serviceWorker
+            .register("/sw.js")
+            .then((reg) => console.log("[SW] Registered:", reg.scope))
+            .catch((err) => console.warn("[SW] Registration failed:", err));
+        });
+      }
+    </script>
 </body>
 </html>
