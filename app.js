@@ -622,7 +622,7 @@ function triggerImport() {
         saveToStorage();
         renderStash();
         renderTagFilter();
-        showToast(`✅ Import ${files.length} ไฟล์สำเร็จ`);
+        showToast(`✅ Import ${files.length} success`);
     };
     input.click();
 }
