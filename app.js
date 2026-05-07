@@ -1,10 +1,9 @@
 const LOCAL_STORAGE_KEY = "local_stash_array";
-const LOCAL_STORAGE_LIMIT_KEY = "local_stash_limit";
 const LOCAL_LANG_KEY = "local_stash_lang";
 const LOCAL_THEME_KEY = "local_stash_theme";
 
 let SUPPORTED_LANGUAGES = {};
-let MAX_STORAGE_BYTES = 4096;
+const MAX_STORAGE_BYTES = 5 * 1024 * 1024; // 5 MB — localStorage standard limit
 let stashItems = [];
 let deleteTimeouts = {};
 let stashConfirmTimeout = null;
@@ -37,7 +36,6 @@ function toggleTheme() {
 window.onload = async function () {
     const savedTheme = localStorage.getItem(LOCAL_THEME_KEY) || "light";
     applyTheme(savedTheme);
-    detectAndSetStorageLimit(false);
     await initLanguageSystem();
     loadFromStorage();
     renderStash();
@@ -54,36 +52,7 @@ function getWordCount(str) {
     return str.trim() === "" ? 0 : str.trim().split(/\s+/).length;
 }
 
-function detectAndSetStorageLimit(force = false) {
-    const savedLimit = localStorage.getItem(LOCAL_STORAGE_LIMIT_KEY);
-    if (savedLimit && !force) {
-        MAX_STORAGE_BYTES = parseInt(savedLimit, 10);
-        return;
-    }
-    const testKey = "__storage_capacity_test__";
-    let min = 0, max = 10 * 1024 * 1024, detectedLimit = 0;
-    localStorage.removeItem(testKey);
-    while (min <= max) {
-        let mid = Math.floor((min + max) / 2);
-        try {
-            localStorage.setItem(testKey, "X".repeat(mid));
-            detectedLimit = mid;
-            min = mid + 1;
-        } catch (e) {
-            max = mid - 1;
-        }
-    }
-    localStorage.removeItem(testKey);
-    const currentUsedBytes = getByteSize(JSON.stringify(stashItems));
-    const finalLimit = detectedLimit + currentUsedBytes;
-    if (finalLimit > 0) {
-        MAX_STORAGE_BYTES = finalLimit;
-        localStorage.setItem(LOCAL_STORAGE_LIMIT_KEY, finalLimit.toString());
-    } else {
-        MAX_STORAGE_BYTES = 4096;
-        localStorage.setItem(LOCAL_STORAGE_LIMIT_KEY, "4096");
-    }
-}
+
 
 
 async function initLanguageSystem() {
@@ -272,6 +241,21 @@ function insertMd(before, after) {
     const newCursorPos = start + before.length + selectedText.length + after.length;
     textarea.setSelectionRange(newCursorPos, newCursorPos);
     updateInputStats();
+}
+
+function insertMdCard(id, before, after) {
+    const textarea = document.getElementById(`textarea-${id}`);
+    if (!textarea) return;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const fullText = textarea.value;
+    const selectedText = fullText.substring(start, end);
+    const newText = fullText.substring(0, start) + before + selectedText + after + fullText.substring(end);
+    textarea.value = newText;
+    textarea.focus();
+    const newCursorPos = start + before.length + selectedText.length;
+    textarea.setSelectionRange(newCursorPos, newCursorPos);
+    editStashContent(id, textarea.value);
 }
 
 
@@ -803,7 +787,21 @@ function createCardElement(item) {
         </div>
         <div class="textarea-wrapper" id="wrapper-${item.id}">
             ${previewHtml}
-            <textarea class="card-textarea" id="textarea-${item.id}" onblur="disableEditMode('${item.id}')" oninput="editStashContent('${item.id}', this.value)"></textarea>
+            ${type === "2" ? `<div class="card-md-toolbar" id="card-md-toolbar-${item.id}">
+                <button onclick="insertMdCard('${item.id}','**','**')" title="${t('md_bold')}"><b>B</b></button>
+                <button onclick="insertMdCard('${item.id}','_','_')" title="${t('md_italic')}"><i>I</i></button>
+                <button onclick="insertMdCard('${item.id}','~~','~~')" title="${t('md_strike')}"><s>S</s></button>
+                <button onclick="insertMdCard('${item.id}','# ','')" title="${t('md_h1')}">H1</button>
+                <button onclick="insertMdCard('${item.id}','## ','')" title="${t('md_h2')}">H2</button>
+                <button onclick="insertMdCard('${item.id}','### ','')" title="${t('md_h3')}">H3</button>
+                <button onclick="insertMdCard('${item.id}','- ','')" title="${t('md_bullet')}">•</button>
+                <button onclick="insertMdCard('${item.id}','1. ','')" title="${t('md_number')}">1.</button>
+                <button onclick="insertMdCard('${item.id}','> ','')" title="${t('md_quote')}">"</button>
+                <button onclick="insertMdCard('${item.id}','[','](url)')" title="${t('md_link')}">Link</button>
+                <button onclick="insertMdCard('${item.id}','\`','\`')" title="${t('md_code')}">Code</button>
+                <button onclick="insertMdCard('${item.id}','\`\`\`\\n','\\n\`\`\`')" title="${t('md_codeblock')}">Block</button>
+            </div>` : ""}
+            <textarea class="card-textarea ${type === "2" ? "card-edit-textarea" : ""}" id="textarea-${item.id}" onblur="disableEditMode('${item.id}')" oninput="editStashContent('${item.id}', this.value)"></textarea>
             <div class="card-key-edit-container" id="key-edit-container-${item.id}" style="display:none;">
                 <span class="card-key-edit-label">🔑 Key:</span>
                 <input type="text" class="title-input secret-key-mask card-key-edit-input" id="key-edit-${item.id}" placeholder="No encryption" value="${escapeHtml(currentActiveKey)}" oninput="editStashKey('${item.id}', this.value)" onblur="disableEditMode('${item.id}')" autocomplete="off">
@@ -860,11 +858,13 @@ function enableEditMode(id) {
     const preview = document.getElementById(`preview-${id}`);
     const textarea = document.getElementById(`textarea-${id}`);
     const keyContainer = document.getElementById(`key-edit-container-${id}`);
+    const mdToolbar = document.getElementById(`card-md-toolbar-${id}`);
     if (!card || !textarea) return;
     if (textarea.style.display !== "block") {
         card.classList.add("card-editing");
         if (titleText && titleEdit) { titleText.style.display = "none"; titleEdit.style.display = "block"; }
         if (preview) preview.style.display = "none";
+        if (mdToolbar) mdToolbar.style.display = "flex";
         textarea.style.display = "block";
         textarea.style.height = "auto";
         textarea.style.height = Math.max(textarea.scrollHeight, 64) + "px";
@@ -883,10 +883,14 @@ function disableEditMode(id) {
         const textarea = document.getElementById(`textarea-${id}`);
         const keyEditInput = document.getElementById(`key-edit-${id}`);
         const keyContainer = document.getElementById(`key-edit-container-${id}`);
+        const mdToolbar = document.getElementById(`card-md-toolbar-${id}`);
         if (!card || !textarea) return;
         if ([textarea, titleEdit, keyEditInput].includes(document.activeElement)) return;
+        // also keep edit mode active if a md toolbar button was clicked
+        if (mdToolbar && mdToolbar.contains(document.activeElement)) return;
         card.classList.remove("card-editing");
         if (titleText && titleEdit) { titleText.style.display = "block"; titleEdit.style.display = "none"; }
+        if (mdToolbar) mdToolbar.style.display = "none";
         textarea.scrollTop = 0;
         const item = stashItems.find(i => i.id === id);
         if (item && preview) {
