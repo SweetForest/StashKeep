@@ -7,7 +7,7 @@
 //
 // ============================================================
 
-const CACHE_VERSION = "v1";
+const CACHE_VERSION = "v2";
 const CACHE_NAME = `stashkeep-${CACHE_VERSION}`;
 
 // All static assets to precache for offline support
