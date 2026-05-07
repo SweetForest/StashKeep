@@ -1,80 +1,101 @@
-const VERSION_URL = "./version"; 
+const VERSION_URL = "./version";
+
+async function getCacheName() {
+  try {
+    const res = await fetch(VERSION_URL, {
+      cache: "no-store"
+    });
+
+    const version = await res.text();
+
+    return `stashkeep-${version.trim()}`;
+  } catch {
+    return "stashkeep-fallback";
+  }
+}
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    fetch(VERSION_URL)
-      .then(res => res.text())
-      .then(version => {
-        const CACHE_NAME = `stashkeep-${version.trim()}`;
-        return caches.open(CACHE_NAME).then((cache) => {
-          return cache.addAll([
-            "index.html",
-            "app.js",
-            "style.css",
-            "site.webmanifest",
-            "lang/languages.json",
-            "lang/en.json",
-            "icons/favicon.ico",
-            "icons/favicon-16x16.png",
-            "icons/favicon-32x32.png",
-            "icons/apple-touch-icon.png",
-            "icons/android-chrome-192x192.png",
-            "icons/android-chrome-512x512.png",
-            "https://cdn.jsdelivr.net/npm/marked/marked.min.js",
-          ]);
-        });
-      })
-      .then(() => self.skipWaiting())
+    (async () => {
+      const CACHE_NAME = await getCacheName();
+
+      const cache = await caches.open(CACHE_NAME);
+
+      const assets = [
+        "./",
+        "./index.html",
+        "./app.js",
+        "./style.css",
+        "./site.webmanifest",
+        "./lang/languages.json",
+        "./lang/en.json",
+        "./icons/favicon.ico",
+        "./icons/favicon-16x16.png",
+        "./icons/favicon-32x32.png",
+        "./icons/apple-touch-icon.png",
+        "./icons/android-chrome-192x192.png",
+        "./icons/android-chrome-512x512.png",
+        "https://cdn.jsdelivr.net/npm/marked/marked.min.js",
+      ];
+
+      for (const asset of assets) {
+        try {
+          const response = await fetch(asset);
+
+          if (response.ok) {
+            await cache.put(asset, response);
+          }
+        } catch (e) {
+          console.warn("Cache failed:", asset);
+        }
+      }
+
+      self.skipWaiting();
+    })()
   );
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    fetch(VERSION_URL)
-      .then(res => res.text())
-      .then(version => {
-        const CURRENT_CACHE = `stashkeep-${version.trim()}`;
-        return caches.keys().then((cacheNames) =>
-          Promise.all(
-            cacheNames
-              .filter((name) => name.startsWith("stashkeep-") && name !== CURRENT_CACHE)
-              .map((name) => caches.delete(name))
-          )
-        );
-      })
-      .then(() => self.clients.claim())
+    (async () => {
+      const CURRENT_CACHE = await getCacheName();
+
+      const cacheNames = await caches.keys();
+
+      await Promise.all(
+        cacheNames.map((name) => {
+          if (
+            name.startsWith("stashkeep-") &&
+            name !== CURRENT_CACHE
+          ) {
+            return caches.delete(name);
+          }
+        })
+      );
+
+      await self.clients.claim();
+    })()
   );
 });
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
 
-  const isCoreAsset = event.request.url.match(/\.(html|js|css|json)$/) || 
-                      event.request.url.endsWith("/StashKeep/");
+  event.respondWith(
+    (async () => {
+      const cached = await caches.match(event.request);
 
-  if (isCoreAsset) {
-    event.respondWith(
-      fetch(event.request)
-        .then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            const responseToCache = networkResponse.clone();
-            fetch(VERSION_URL).then(res => res.text()).then(version => {
-              caches.open(`stashkeep-${version.trim()}`).then((cache) => {
-                cache.put(event.request, responseToCache);
-              });
-            });
-          }
-          return networkResponse;
-        })
-        .catch(() => caches.match(event.request))
-    );
-  } else {
-    event.respondWith(
-      caches.match(event.request).then((cachedResponse) => {
-        return cachedResponse || fetch(event.request).then((networkResponse) => {
-          return networkResponse;
-        });
-      })
-    );
-  }
+      if (cached) {
+        return cached;
+      }
+
+      try {
+        const response = await fetch(event.request);
+
+        return response;
+      } catch {
+        return caches.match("./index.html");
+      }
+    })()
+  );
 });
