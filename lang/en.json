@@ -30,5 +30,18 @@
   "import_modal_title": "Import Detected",
   "import_modal_desc": "New data found in URL. Do you want to import these {count} items?",
   "import_confirm_btn": "Proceed Import",
-  "import_cancel_btn": "Discard"
+  "import_cancel_btn": "Discard",
+  "md_bold": "Bold",
+  "md_italic": "Italic",
+  "md_strike": "Strike",
+  "md_h1": "H1",
+  "md_h2": "H2",
+  "md_h3": "H3",
+  "md_bullet": "List",
+  "md_number": "1.",
+  "md_quote": "Quote",
+  "md_link": "Link",
+  "md_image": "Image",
+  "md_code": "Code",
+  "md_codeblock": "Block"
 }
