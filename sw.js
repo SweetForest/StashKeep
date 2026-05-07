@@ -19,20 +19,20 @@ self.addEventListener("install", (event) => {
     getCacheName().then((cacheName) => {
       return caches.open(cacheName).then((cache) => {
         return cache.addAll([
-          "index.html",
-          "app.js",
-          "style.css",
-          "site.webmanifest",
-          "lang/languages.json",
-          "lang/en.json",
-          "icons/favicon.ico",
-          "icons/favicon-16x16.png",
-          "icons/favicon-32x32.png",
-          "icons/apple-touch-icon.png",
-          "icons/android-chrome-192x192.png",
-          "icons/android-chrome-512x512.png",
-          "https://cdn.jsdelivr.net/npm/marked/marked.min.js",
-        ]);
+            "./index.html",
+            "./app.js",
+            "./style.css",
+            "./site.webmanifest",
+            "./lang/languages.json",
+            "./lang/en.json",
+            "./icons/favicon.ico",
+            "./icons/favicon-16x16.png",
+            "./icons/favicon-32x32.png",
+            "./icons/apple-touch-icon.png",
+            "./icons/android-chrome-192x192.png",
+            "./icons/android-chrome-512x512.png",
+            "https://cdn.jsdelivr.net/npm/marked/marked.min.js",
+          ]);
       });
     }).then(() => self.skipWaiting())
   );
