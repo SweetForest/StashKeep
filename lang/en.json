@@ -3,6 +3,8 @@
   "storage_space": "LocalStorage Space",
   "input_placeholder": "Type plain text or Markdown here...",
   "add_title_placeholder": "Add title...",
+  "tag_placeholder": "🏷️ tags, comma",
+  "key_placeholder": "🔑 Secret Key",
   "stash_button": "Stash It",
   "stash_button_warn": "Confirm Auto-Clean ({count} items)",
   "pinned_section": "Pinned",
@@ -16,5 +18,17 @@
   "delete_confirm": "⚠️ Confirm",
   "copied_btn": "✅ Copied!",
   "copy_btn": "📋 Copy",
-  "char_counter": "{count} characters"
+  "stats_info": "{chars} chars · {words} words · {bytes} B",
+  "import_warn_title": "Import & Replace All Data?",
+  "import_warn_body": "Importing will <strong>delete all current data</strong> and replace it with the selected file contents.<br><br>Existing data will be <span style='color:var(--danger);font-weight:700;'>permanently removed</span> and cannot be recovered.<br><br>It is highly recommended to <strong>Export Backup</strong> first.",
+  "btn_cancel": "Cancel",
+  "btn_export_backup": "⬇ Export Backup First",
+  "btn_import_danger": "⚠️ Import & Overwrite",
+  "import_success": "✅ Import successful! {count} notes loaded.",
+  "import_err_size": "❌ Data exceeds LocalStorage capacity.",
+  "import_err_format": "❌ Invalid file — Must be a valid .json from Stash Keep.",
+  "import_modal_title": "Import Detected",
+  "import_modal_desc": "New data found in URL. Do you want to import these {count} items?",
+  "import_confirm_btn": "Proceed Import",
+  "import_cancel_btn": "Discard"
 }
