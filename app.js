@@ -1,9 +1,12 @@
+import { openStashDB, getStoredItems, putItem, deleteItem } from './db.js';
+
 const LOCAL_STORAGE_KEY = "local_stash_array";
 const LOCAL_LANG_KEY = "local_stash_lang";
 const LOCAL_THEME_KEY = "local_stash_theme";
 
+const CURRENT_APP_VERSION = "v1.0.1";
+
 let SUPPORTED_LANGUAGES = {};
-const MAX_STORAGE_BYTES = 5 * 1024 * 1024; // 5 MB — localStorage standard limit
 let stashItems = [];
 let deleteTimeouts = {};
 let stashConfirmTimeout = null;
@@ -19,7 +22,6 @@ const TYPE_MAP = {
     "2": "md"
 };
 
-
 function applyTheme(theme) {
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem(LOCAL_THEME_KEY, theme);
@@ -32,14 +34,67 @@ function toggleTheme() {
     applyTheme(current === "dark" ? "light" : "dark");
 }
 
+async function loadVersionInfo() {
+    try {
+        const res = await fetch('version?t=' + Date.now(), { cache: 'no-store' });
+        const serverVersion = (await res.text()).trim();
+        const el = document.getElementById("appVersion");
+        
+        console.log(`[Version Check] Local: ${CURRENT_APP_VERSION}, Server: ${serverVersion}`);
+
+        if (el) el.textContent = serverVersion;
+
+        if (serverVersion !== CURRENT_APP_VERSION) {
+            const upBtn = document.getElementById("upgradeBtn");
+            const clearBtn = document.getElementById("clearSWCacheBtn");
+            if (upBtn) {
+                upBtn.style.display = "inline-block";
+                upBtn.innerHTML = `🚀 Upgrade to ${serverVersion}`;
+            }
+            if (clearBtn) {
+                clearBtn.style.display = "none";
+            }
+        }
+    } catch (e) { console.warn("Version check failed", e); }
+}
+
+async function forceUpgrade() {
+    if ('serviceWorker' in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        for (let registration of registrations) {
+            await registration.unregister();
+        }
+    }
+    const cacheNames = await caches.keys();
+    for (const name of cacheNames) {
+        await caches.delete(name);
+    }
+    // Hard reload to bypass any remaining browser-level memory cache
+    window.location.href = window.location.origin + window.location.pathname + '?v=' + Date.now();
+}
+
+async function clearServiceWorkerCache() {
+    if ('serviceWorker' in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        for (let registration of registrations) {
+            await registration.unregister();
+        }
+    }
+    const cacheNames = await caches.keys();
+    await Promise.all(cacheNames.map(name => caches.delete(name)));
+    showToast(t("cache_cleared_success"));
+    // Note: The page will still run the old code until a refresh.
+}
 
 window.onload = async function () {
     const savedTheme = localStorage.getItem(LOCAL_THEME_KEY) || "light";
     applyTheme(savedTheme);
+    await openStashDB();
     await initLanguageSystem();
-    loadFromStorage();
+    await loadFromStorage();
     renderStash();
     updateStorageMonitor();
+    loadVersionInfo();
     setupSearch();
     renderTagFilter();
 };
@@ -52,8 +107,12 @@ function getWordCount(str) {
     return str.trim() === "" ? 0 : str.trim().split(/\s+/).length;
 }
 
-
-
+function highlightText(text, query) {
+    if (!query) return text;
+    const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`(${escapedQuery})`, "gi");
+    return text.replace(regex, `<mark>$1</mark>`);
+}
 
 async function initLanguageSystem() {
     try {
@@ -100,10 +159,13 @@ async function loadLanguage(langCode) {
         translateUI();
     } catch (error) {
         translations = {
-            "subtitle": "Save text in Local Storage. Raw Text, Markdown.",
-            "storage_space": "Local Storage Space",
+            "subtitle": "Save notes and snippets locally. Raw Text, Markdown.",
+            "storage_space": "Total Items:",
             "input_placeholder": "Type plain text or Markdown here...",
+            "search_placeholder": "Search title, content or tags...",
             "add_title_placeholder": "Add title...",
+            "tag_placeholder": "🏷️ tags, comma",
+            "key_placeholder": "🔑 Secret Key",
             "stash_button": "Stash It",
             "pinned_section": "Pinned",
             "notes_section": "Notes",
@@ -114,9 +176,11 @@ async function loadLanguage(langCode) {
             "pin_btn": "📌 Pin",
             "delete_btn": "🗑️ Delete",
             "delete_confirm": "⚠️ Confirm",
-            "copied_btn": "✅ Copied!",
+            "copied_btn": "✅ Copied!", 
+            "empty_key_error": "Key cannot be empty!",
+            "incorrect_key_error": "Incorrect key!",
             "copy_btn": "📋 Copy",
-            "char_counter": "{count} characters"
+            "stats_info": "{chars} chars · {words} words · {bytes} B"
         };
         currentLang = "en";
         const selector = document.getElementById("langSelector");
@@ -143,35 +207,59 @@ function translateUI() {
     if (el("subtext")) el("subtext").textContent = t("subtitle");
     if (el("labelStorage")) el("labelStorage").textContent = t("storage_space");
     if (el("mainInput")) el("mainInput").placeholder = t("input_placeholder");
+    if (el("searchInput")) el("searchInput").placeholder = t("search_placeholder");
     if (el("mainTitle")) el("mainTitle").placeholder = t("add_title_placeholder");
+    if (el("mainTags")) el("mainTags").placeholder = t("tag_placeholder");
+    if (el("mainKey")) el("mainKey").placeholder = t("key_placeholder");
     if (el("pinnedTitle")) el("pinnedTitle").textContent = t("pinned_section");
     if (el("notesTitle")) el("notesTitle").textContent = t("notes_section");
     if (el("emptyMessage")) el("emptyMessage").textContent = t("empty_state");
     const btnAdd = el("btnAdd");
+    if (el("clearSWCacheBtn")) el("clearSWCacheBtn").textContent = t("clear_cache_btn");
     if (btnAdd && !btnAdd.classList.contains("btn-add-warn")) {
         btnAdd.textContent = t("stash_button");
     }
 }
 
-
-function loadFromStorage() {
-    const rawData = localStorage.getItem(LOCAL_STORAGE_KEY);
-    if (rawData) {
+async function loadFromStorage() {
+    const localStorageRawData = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (localStorageRawData) {
         try {
-            stashItems = JSON.parse(rawData);
-            stashItems.forEach(item => {
-                delete item.unlockedSession;
-                delete item.activeKeyTemp;
-                delete item.decryptedContentTemp;
-                if (!item.tags) item.tags = [];
-            });
+            const lsItems = JSON.parse(localStorageRawData);
+            if (lsItems.length > 0) {
+                const dbItems = await getStoredItems();
+                if (dbItems.length === 0) {
+                    for (let i = 0; i < lsItems.length; i++) {
+                        const item = lsItems[i];
+                        if (item.position === undefined) item.position = i;
+                        await putItem(item);
+                    }
+                    localStorage.removeItem(LOCAL_STORAGE_KEY);
+                    stashItems = lsItems;
+                } else {
+                    stashItems = dbItems;
+                }
+            } else {
+                stashItems = await getStoredItems();
+            }
         } catch (e) {
-            stashItems = [];
+            stashItems = await getStoredItems();
         }
+    } else {
+        stashItems = await getStoredItems();
     }
+
+    stashItems.forEach(item => {
+        delete item.unlockedSession;
+        delete item.activeKeyTemp;
+        delete item.decryptedContentTemp;
+        if (!item.tags) item.tags = [];
+    });
+
+    stashItems.sort((a, b) => (b.pinned - a.pinned) || (a.position || 0) - (b.position || 0));
 }
 
-function saveToStorage() {
+async function saveItemToDB(item) {
     const cleanItems = stashItems.map(item => {
         const c = { ...item };
         delete c.unlockedSession;
@@ -179,15 +267,10 @@ function saveToStorage() {
         delete c.decryptedContentTemp;
         return c;
     });
-    const jsonString = JSON.stringify(cleanItems);
-    try {
-        if (getByteSize(jsonString) > MAX_STORAGE_BYTES) throw new Error();
-        localStorage.setItem(LOCAL_STORAGE_KEY, jsonString);
-        updateStorageMonitor();
-        return true;
-    } catch (e) {
-        return false;
-    }
+    const cleanItem = cleanItems.find(i => i.id === item.id) || item;
+    await putItem(cleanItem);
+    updateStorageMonitor();
+    return true;
 }
 
 function calculateCurrentBytes() {
@@ -203,27 +286,20 @@ function calculateCurrentBytes() {
 }
 
 function updateStorageMonitor() {
-    const currentBytes = calculateCurrentBytes();
-    const percentage = Math.min((currentBytes / MAX_STORAGE_BYTES) * 100, 100).toFixed(1);
     const storageText = document.getElementById("storageText");
-    const progressBar = document.getElementById("progressBar");
-    if (storageText && progressBar) {
-        storageText.textContent = `${currentBytes.toLocaleString()} / ${MAX_STORAGE_BYTES.toLocaleString()} Bytes (${percentage}%)`;
-        progressBar.style.width = `${percentage}%`;
-        progressBar.className = "progress-bar";
-        if (percentage > 90) progressBar.classList.add("danger");
-        else if (percentage > 70) progressBar.classList.add("warning");
+    const labelStorage = document.getElementById("labelStorage");
+    
+    if (storageText) {
+        storageText.textContent = stashItems.length;
     }
 }
 
 function compileMarkdown(md) {
     if (!md) return "";
-    
     marked.setOptions({
         breaks: true,
         gfm: true
     });
-
     return marked.parse(md);
 }
 
@@ -233,10 +309,8 @@ function insertMd(before, after) {
     const end = textarea.selectionEnd;
     const fullText = textarea.value;
     const selectedText = fullText.substring(start, end);
-    
     const newText = fullText.substring(0, start) + before + selectedText + after + fullText.substring(end);
     textarea.value = newText;
-    
     textarea.focus();
     const newCursorPos = start + before.length + selectedText.length + after.length;
     textarea.setSelectionRange(newCursorPos, newCursorPos);
@@ -257,7 +331,6 @@ function insertMdCard(id, before, after) {
     textarea.setSelectionRange(newCursorPos, newCursorPos);
     editStashContent(id, textarea.value);
 }
-
 
 function parseStashText(rawText) {
     let title = "", type = "", text = rawText;
@@ -284,8 +357,6 @@ function escapeHtml(text) {
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#039;");
 }
-
-
 
 async function getKeyMaterial(password) {
     return window.crypto.subtle.importKey(
@@ -319,7 +390,7 @@ async function cryptEngine(text, password) {
 }
 
 async function decryptEngine(base64Text, password) {
-    if (!password) return base64Text;
+    if (!password || password.trim() === "") return null;
     try {
         const bytes = Uint8Array.from(atob(base64Text), c => c.charCodeAt(0));
         const key = await deriveKey(password, bytes.slice(0, 16));
@@ -383,7 +454,6 @@ function filterItems(items) {
     });
 }
 
-
 async function handleStashClick() {
     const input = document.getElementById("mainInput");
     const titleInput = document.getElementById("mainTitle");
@@ -410,36 +480,12 @@ async function handleStashClick() {
         pinned: false,
         time: new Date().toLocaleDateString("en-US"),
         encrypted: !!secretKey,
-        tags
+        tags,
+        position: stashItems.length > 0 ? Math.min(...stashItems.map(i => i.position || 0)) - 1 : 0
     };
-    let tempStash = [newItem, ...stashItems];
-    let tempBytes = getByteSize(JSON.stringify(tempStash));
-    if (tempBytes > MAX_STORAGE_BYTES) {
-        if (!btn.classList.contains("btn-add-warn")) {
-            let bytesFreed = 0; pendingCleanCount = 0;
-            for (let i = stashItems.length - 1; i >= 0; i--) {
-                if (!stashItems[i].pinned) {
-                    bytesFreed += getByteSize(JSON.stringify(stashItems[i]));
-                    pendingCleanCount++;
-                    if ((tempBytes - bytesFreed) <= MAX_STORAGE_BYTES) break;
-                }
-            }
-            if ((tempBytes - bytesFreed) > MAX_STORAGE_BYTES) return;
-            btn.classList.add("btn-add-warn");
-            btn.textContent = t("stash_button_warn", { count: pendingCleanCount });
-            stashConfirmTimeout = setTimeout(resetStashButton, 4000);
-            return;
-        } else {
-            clearTimeout(stashConfirmTimeout);
-            let removed = 0;
-            for (let i = stashItems.length - 1; i >= 0; i--) {
-                if (removed >= pendingCleanCount) break;
-                if (!stashItems[i].pinned) { stashItems.splice(i, 1); removed++; }
-            }
-        }
-    }
+
     stashItems.unshift(newItem);
-    if (saveToStorage()) {
+    if (await saveItemToDB(newItem)) {
         input.value = ""; titleInput.value = ""; typeSelect.value = "";
         keyInput.value = ""; if (tagInput) tagInput.value = "";
         updateInputStats();
@@ -453,7 +499,7 @@ async function handleStashClick() {
 
 function resetStashButton() {
     const btn = document.getElementById("btnAdd");
-    if (btn) { btn.className = "btn-add"; btn.textContent = t("stash_button"); pendingCleanCount = 0; }
+    if (btn) { btn.className = "btn-add"; btn.textContent = t("stash_button"); }
 }
 
 
@@ -475,9 +521,7 @@ function exportAllData() {
     URL.revokeObjectURL(url);
 }
 
-
 function triggerImportAll() {
-    
     showImportConfirmModal();
 }
 
@@ -487,8 +531,6 @@ function showImportConfirmModal() {
         modal = document.createElement("div");
         modal.id = "importConfirmModal";
         modal.className = "modal-overlay";
-        
-        
         modal.innerHTML = `
             <div class="modal-box">
                 <div class="modal-icon">⚠️</div>
@@ -507,13 +549,10 @@ function showImportConfirmModal() {
                 </div>
             </div>`;
         document.body.appendChild(modal);
-        
-        
         modal.addEventListener("click", (e) => { 
             if (e.target === modal) closeImportConfirmModal(); 
         });
     }
-
     modal.style.display = "flex";
     requestAnimationFrame(() => modal.classList.add("visible"));
 }
@@ -532,17 +571,13 @@ async function proceedImportAll() {
     const input = document.createElement("input");
     input.type = "file";
     input.accept = ".json";
-    
     input.onchange = async (e) => {
         const file = e.target.files[0];
         if (!file) return;
-
         try {
             const text = await file.text();
             const data = JSON.parse(text);
             let items = [];
-
-            
             if (Array.isArray(data)) {
                 items = data;
             } else if (data.items && Array.isArray(data.items)) {
@@ -550,35 +585,28 @@ async function proceedImportAll() {
             } else {
                 throw new Error("Format mismatch");
             }
-
-            
-            
             items = items.filter(i => i && typeof i.id === "string" && (typeof i.content === "string" || typeof i.text === "string"));
-            
             items.forEach(i => { 
                 if (!i.tags) i.tags = []; 
-                
                 if (!i.content && i.text) i.content = i.text;
             });
-
-            
             stashItems = items;
-
-            if (saveToStorage()) {
+            for (let i = 0; i < items.length; i++) {
+                const item = items[i];
+                if (item.position === undefined) item.position = i;
+                await putItem(item);
+            }
+            if (true) {
                 renderStash();
                 if (typeof renderTagFilter === "function") renderTagFilter();
-                
-                const msg = translations.import_success.replace("{count}", items.length);
-                showToast(msg);
-            } else {
-                showToast(translations.import_err_size, "danger");
             }
+            const msg = translations.import_success.replace("{count}", items.length);
+            showToast(msg);
         } catch (err) {
             console.error("Import error:", err);
             showToast(translations.import_err_format, "danger");
         }
     };
-
     input.click();
 }
 
@@ -602,15 +630,14 @@ function triggerImport() {
                 tags: []
             };
             stashItems.unshift(newItem);
+            await putItem(newItem);
         }
-        saveToStorage();
         renderStash();
         renderTagFilter();
         showToast(`✅ Import ${files.length} success`);
     };
     input.click();
 }
-
 
 function showToast(msg, type = "success") {
     let toast = document.getElementById("stashToast");
@@ -625,7 +652,6 @@ function showToast(msg, type = "success") {
     clearTimeout(toast._timeout);
     toast._timeout = setTimeout(() => toast.classList.remove("visible"), 3000);
 }
-
 
 function exportNote(id) {
     const item = stashItems.find(i => i.id === id);
@@ -655,8 +681,7 @@ function exportAllNotes() {
     URL.revokeObjectURL(url);
 }
 
-
-function duplicateNote(id) {
+async function duplicateNote(id) {
     const item = stashItems.find(i => i.id === id);
     if (!item) return;
     const copy = {
@@ -664,6 +689,7 @@ function duplicateNote(id) {
         id: Date.now().toString(),
         pinned: false,
         time: new Date().toLocaleDateString("en-US"),
+        position: (item.position || 0) + 0.5,
         unlockedSession: false,
         activeKeyTemp: undefined,
         decryptedContentTemp: undefined,
@@ -671,12 +697,11 @@ function duplicateNote(id) {
     };
     const idx = stashItems.findIndex(i => i.id === id);
     stashItems.splice(idx + 1, 0, copy);
-    saveToStorage();
+    await saveItemToDB(copy);
     renderStash();
 }
 
-
-function addTagToNote(id, tag) {
+async function addTagToNote(id, tag) {
     tag = tag.trim().toLowerCase();
     if (!tag) return;
     const item = stashItems.find(i => i.id === id);
@@ -684,21 +709,20 @@ function addTagToNote(id, tag) {
     if (!item.tags) item.tags = [];
     if (!item.tags.includes(tag)) {
         item.tags.push(tag);
-        saveToStorage();
+        await saveItemToDB(item);
         renderStash();
         renderTagFilter();
     }
 }
 
-function removeTagFromNote(id, tag) {
+async function removeTagFromNote(id, tag) {
     const item = stashItems.find(i => i.id === id);
     if (!item) return;
     item.tags = (item.tags || []).filter(t => t !== tag);
-    saveToStorage();
+    await saveItemToDB(item);
     renderStash();
     renderTagFilter();
 }
-
 
 function renderStash() {
     const pinnedList = document.getElementById("pinnedList");
@@ -732,11 +756,11 @@ function createCardElement(item) {
     const encBadge = item.encrypted ? `<span class="card-badge badge-enc">🔒</span>` : "";
     const titleHtml = title
         ? `<div class="card-title-text" id="title-text-${item.id}">${escapeHtml(title)} ${badgeHtml}${encBadge}</div>`
-        : `<div class="card-title-text no-title-placeholder" id="title-text-${item.id}">${t("untitled_note")} ${badgeHtml}${encBadge}</div>`;
+        : `<div class="card-title-text no-title-placeholder" id="title-text-${item.id}">${highlightText(t("untitled_note"), currentSearchQuery)} ${badgeHtml}${encBadge}</div>`;
 
     const displayContent = item.unlockedSession ? item.decryptedContentTemp : text;
     const wordCount = getWordCount(isLocked ? "" : displayContent);
-
+    
     let previewHtml = "", topActionsHtml = "", copyButtonHtml = "";
 
     if (isLocked) {
@@ -770,8 +794,8 @@ function createCardElement(item) {
             </button>`;
         copyButtonHtml = `<button class="action-btn btn-copy" id="copy-btn-${item.id}">${t("copy_btn")}</button>`;
         previewHtml = type === "2"
-            ? `<div class="markdown-preview" id="preview-${item.id}">${compileMarkdown(displayContent)}</div>`
-            : `<pre class="raw-preview" id="preview-${item.id}">${escapeHtml(displayContent)}</pre>`;
+            ? `<div class="markdown-preview" id="preview-${item.id}">${highlightText(compileMarkdown(displayContent), currentSearchQuery)}</div>`
+            : `<pre class="raw-preview" id="preview-${item.id}">${highlightText(escapeHtml(displayContent), currentSearchQuery)}</pre>`;
     }
 
     const currentActiveKey = (item.encrypted && item.unlockedSession && item.activeKeyTemp) ? item.activeKeyTemp : "";
@@ -782,7 +806,7 @@ function createCardElement(item) {
     card.innerHTML = `
         <div class="card-header-row">
             ${titleHtml}
-            <input type="text" class="card-title-edit-input" id="title-edit-${item.id}" placeholder="${t("card_placeholder_title")}" value="${escapeHtml(title)}" oninput="editStashTitle('${item.id}', this.value)" onblur="disableEditMode('${item.id}')">
+            <input type="text" class="card-title-edit-input" id="title-edit-${item.id}" placeholder="${t("card_placeholder_title")}" value="${escapeHtml(title)}" oninput="editStashTitle('${item.id}', this.value)" onblur="disableEditMode('${item.id}')" autocomplete="off">
             <div class="top-actions-group">${topActionsHtml}</div>
         </div>
         <div class="textarea-wrapper" id="wrapper-${item.id}">
@@ -803,7 +827,7 @@ function createCardElement(item) {
             </div>` : ""}
             <textarea class="card-textarea ${type === "2" ? "card-edit-textarea" : ""}" id="textarea-${item.id}" onblur="disableEditMode('${item.id}')" oninput="editStashContent('${item.id}', this.value)"></textarea>
             <div class="card-key-edit-container" id="key-edit-container-${item.id}" style="display:none;">
-                <span class="card-key-edit-label">🔑 Key:</span>
+                <span class="card-key-edit-label">🔑 Key:</span> 
                 <input type="text" class="title-input secret-key-mask card-key-edit-input" id="key-edit-${item.id}" placeholder="No encryption" value="${escapeHtml(currentActiveKey)}" oninput="editStashKey('${item.id}', this.value)" onblur="disableEditMode('${item.id}')" autocomplete="off">
             </div>
         </div>
@@ -848,7 +872,6 @@ function createCardElement(item) {
     return card;
 }
 
-
 function enableEditMode(id) {
     const card = document.querySelector(`[data-id="${id}"]`);
     const item = stashItems.find(i => i.id === id);
@@ -886,7 +909,6 @@ function disableEditMode(id) {
         const mdToolbar = document.getElementById(`card-md-toolbar-${id}`);
         if (!card || !textarea) return;
         if ([textarea, titleEdit, keyEditInput].includes(document.activeElement)) return;
-        // also keep edit mode active if a md toolbar button was clicked
         if (mdToolbar && mdToolbar.contains(document.activeElement)) return;
         card.classList.remove("card-editing");
         if (titleText && titleEdit) { titleText.style.display = "block"; titleEdit.style.display = "none"; }
@@ -906,8 +928,6 @@ function disableEditMode(id) {
         if (keyContainer) keyContainer.style.display = "none";
     }, 180);
 }
-
-
 async function editStashKey(id, newKey) {
     const item = stashItems.find(i => i.id === id);
     if (!item) return;
@@ -925,7 +945,7 @@ async function editStashKey(id, newKey) {
         item.text = (oldParsed.title || typeSuffix) ? `[${oldParsed.title}${typeSuffix}] ${content}` : content;
     }
     updateStatsOnCard(id, item.text);
-    saveToStorage();
+    await saveItemToDB(item);
 }
 
 async function editStashTitle(id, newTitle) {
@@ -946,17 +966,17 @@ async function editStashTitle(id, newTitle) {
     const titleTextSpan = document.getElementById(`title-text-${id}`);
     if (titleTextSpan) {
         const typeLabel = TYPE_MAP[old.type] || "text";
-        const badgeHtml = `<span class="card-badge badge-${typeLabel}">${typeLabel}</span>`;
+        const badgeHtml = `<span class="card-badge badge-${typeLabel}">${typeLabel}</span>`; 
         if (newTitle.trim()) {
-            titleTextSpan.innerHTML = `${escapeHtml(newTitle.trim())} ${badgeHtml}`;
+            titleTextSpan.innerHTML = `${highlightText(escapeHtml(newTitle.trim()), currentSearchQuery)} ${badgeHtml}`;
             titleTextSpan.classList.remove("no-title-placeholder");
         } else {
-            titleTextSpan.innerHTML = `${t("untitled_note")} ${badgeHtml}`;
-            titleTextSpan.classList.add("no-title-placeholder");
+            titleTextSpan.innerHTML = `${highlightText(t("untitled_note"), currentSearchQuery)} ${badgeHtml}`;
+            titleTextSpan.classList.add("no-title-placeholder"); 
         }
     }
     updateStatsOnCard(id, item.text);
-    saveToStorage();
+    await saveItemToDB(item);
 }
 
 async function editStashContent(id, newContent) {
@@ -975,7 +995,7 @@ async function editStashContent(id, newContent) {
     }
     item.text = (old.title || typeSuffix) ? `[${old.title}${typeSuffix}] ${processed}` : processed;
     updateStatsOnCard(id, item.text);
-    saveToStorage();
+    await saveItemToDB(item);
 }
 
 function updateStatsOnCard(id, fullText) {
@@ -987,13 +1007,13 @@ function updateStatsOnCard(id, fullText) {
     }
 }
 
-
 function handleDeleteClick(id) {
     const btn = document.getElementById(`delete-btn-${id}`);
     if (btn.classList.contains("btn-delete-confirm")) {
         clearTimeout(deleteTimeouts[id]); delete deleteTimeouts[id];
         stashItems = stashItems.filter(i => i.id !== id);
-        saveToStorage(); renderStash(); renderTagFilter();
+        deleteItem(id);
+        renderStash(); renderTagFilter();
     } else {
         btn.classList.add("btn-delete-confirm");
         btn.textContent = t("delete_confirm");
@@ -1016,15 +1036,21 @@ function copyText(id) {
     }
 }
 
-function togglePin(id) {
+async function togglePin(id) {
     const item = stashItems.find(i => i.id === id);
     if (item) {
         item.pinned = !item.pinned;
-        stashItems.sort((a, b) => (a.pinned === b.pinned ? 0 : a.pinned ? -1 : 1));
-        saveToStorage(); renderStash();
+        stashItems.sort((a, b) => (b.pinned - a.pinned) || (a.position - b.position));
+        
+        for (let i = 0; i < stashItems.length; i++) {
+            stashItems[i].position = i;
+            const clean = { ...stashItems[i] };
+            delete clean.unlockedSession; delete clean.activeKeyTemp; delete clean.decryptedContentTemp;
+            await putItem(clean);
+        }
+        renderStash();
     }
 }
-
 
 function activateInlineDecryption(id) {
     const label = document.getElementById(`lockLabel-${id}`);
@@ -1061,28 +1087,37 @@ async function submitInlineDecryption(id) {
     const input = document.getElementById(`decryptKey-${id}`);
     const err = document.getElementById(`decryptError-${id}`);
     if (!input) return;
-    const key = input.value;
+    const key = input.value.trim();
+
+    if (!key) {
+        if (err) { err.textContent = translations.empty_key_error; err.style.display = "block"; }
+        input.focus();
+        return;
+    }
+
     const { text } = parseStashText(item.text);
     const decrypted = await decryptEngine(text, key);
     if (decrypted !== null) {
         item.unlockedSession = true; item.decryptedContentTemp = decrypted; item.activeKeyTemp = key;
         renderStash();
     } else {
-        if (err) { err.textContent = "Incorrect key!"; err.style.display = "block"; }
+        if (err) { err.textContent = translations.incorrect_key_error; err.style.display = "block"; }
         input.value = ""; input.focus();
     }
 }
-
 
 function updateInputStats() {
     const input = document.getElementById("mainInput");
     const stats = document.getElementById("mainStats");
     if (input && stats) {
         const text = input.value;
-        stats.textContent = `${text.length} chars · ${getWordCount(text)} words · ${getByteSize(text)} B`;
+        stats.textContent = t("stats_info", { 
+            chars: text.length, 
+            words: getWordCount(text), 
+            bytes: getByteSize(text) 
+        });
     }
 }
-
 
 function insertMdWrap(before, after) {
     const ta = document.getElementById("mainInput");
@@ -1105,7 +1140,6 @@ function insertMdLine(prefix) {
     ta.focus();
     updateInputStats();
 }
-
 
 function enableCardDrag(id) {
     const card = document.querySelector(`[data-id="${id}"]`);
@@ -1153,12 +1187,57 @@ function getDragAfterElement(container, y) {
     }, { offset: Number.NEGATIVE_INFINITY }).element;
 }
 
-function handleDrop(e, isPinnedArea) {
+async function handleDrop(e, isPinnedArea) {
     e.preventDefault();
     const container = e.currentTarget;
     const reorderedIds = [...container.querySelectorAll(".stash-card")].map(c => c.getAttribute("data-id"));
+    
+    const draggedItem = stashItems.find(i => i.id === draggedCardId);
+    if (draggedItem) draggedItem.pinned = isPinnedArea;
+
     const other = stashItems.filter(i => i.pinned !== isPinnedArea);
     const reordered = reorderedIds.map(id => stashItems.find(i => i.id === id));
     stashItems = isPinnedArea ? [...reordered, ...other] : [...other, ...reordered];
-    saveToStorage(); renderStash();
+    
+    for (let i = 0; i < stashItems.length; i++) {
+        stashItems[i].position = i;
+        const clean = { ...stashItems[i] };
+        delete clean.unlockedSession; delete clean.activeKeyTemp; delete clean.decryptedContentTemp;
+        await putItem(clean);
+    }
+    renderStash();
 }
+
+Object.assign(window, {
+    toggleTheme,
+    changeLanguage,
+    handleStashClick,
+    updateInputStats,
+    exportAllData,
+    triggerImportAll,
+    triggerImport,
+    exportAllNotes,
+    insertMd,
+    insertMdWrap,
+    insertMdLine,
+    closeImportConfirmModal,
+    proceedImportAll,
+    duplicateNote,
+    exportNote,
+    handleDeleteClick,
+    submitInlineDecryption,
+    cancelInlineDecryption,
+    editStashTitle,
+    editStashContent,
+    editStashKey,
+    insertMdCard,
+    enableCardDrag,
+    disableCardDrag,
+    allowDrop,
+    handleDrop,
+    addTagToNote,
+    removeTagFromNote,
+    disableEditMode,
+    forceUpgrade,
+    clearServiceWorkerCache
+});
