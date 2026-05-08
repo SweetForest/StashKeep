@@ -93,8 +93,10 @@ self.addEventListener("fetch", (event) => {
         const response = await fetch(event.request);
 
         return response;
-      } catch {
-        return caches.match("./index.html");
+      } catch (err) {
+        if (event.request.mode === "navigate") {
+          return caches.match("./index.html");
+        }
       }
     })()
   );
