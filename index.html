@@ -18,8 +18,10 @@
 <body>
     <header>
         <div class="header-top">
-            <h1>📗 Stash Keep</h1>
+            <h1>📗 Stash Keep <span id="appVersion" style="font-size: 0.8rem; opacity: 0.5; font-weight: normal;"></span></h1>
             <div class="header-controls">
+                <button id="clearSWCacheBtn" class="action-tool-btn" onclick="clearServiceWorkerCache()">Clear Cache</button>
+                <button id="upgradeBtn" class="upgrade-btn" style="display:none;" onclick="forceUpgrade()">🚀 Update Available</button>
                 <button id="themeToggle" class="icon-btn" onclick="toggleTheme()" title="Toggle theme">☀️</button>
                 <a href="https://github.com/SweetForest/StashKeep" target="_blank" rel="noopener noreferrer" class="github-link">
                     <svg height="18" width="18" viewBox="0 0 16 16" fill="currentColor">
@@ -29,17 +31,14 @@
                 <select id="langSelector" onchange="changeLanguage(this.value)" class="lang-select"></select>
             </div>
         </div>
-        <p class="subtitle" id="subtext">Save text in Local Storage. Raw Text, Markdown.</p>
+        <p class="subtitle" id="subtext">Save notes and snippets locally. Raw Text, Markdown.</p>
     </header>
 
     <main>
         <div class="storage-monitor">
             <div class="storage-info">
-                <span id="labelStorage">Local Storage Space</span>
-                <span id="storageText">0 / 0 Bytes</span>
-            </div>
-            <div class="progress-bar-container">
-                <div id="progressBar" class="progress-bar"></div>
+                <span id="labelStorage"></span>
+                <span id="storageText"></span>
             </div>
         </div>
 
@@ -101,7 +100,7 @@
         <div id="emptyMessage" class="empty-state">No stashed items found.</div>
     </main>
 
-    <script src="app.js"></script>
+    <script type="module" src="app.js"></script>
 <script>
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
