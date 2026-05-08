@@ -4,7 +4,7 @@ const LOCAL_STORAGE_KEY = "local_stash_array";
 const LOCAL_LANG_KEY = "local_stash_lang";
 const LOCAL_THEME_KEY = "local_stash_theme";
 
-const CURRENT_APP_VERSION = "v1.0.2";
+const CURRENT_APP_VERSION = "v1.0.3";
 
 let SUPPORTED_LANGUAGES = {};
 let stashItems = [];
