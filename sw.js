@@ -2,7 +2,7 @@ const VERSION_URL = "./version";
 
 async function getCacheName() {
   try {
-    const res = await fetch(VERSION_URL, {
+    const res = await fetch(`${VERSION_URL}?t=${Date.now()}`, {
       cache: "no-store"
     });
 
